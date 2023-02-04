@@ -14,11 +14,17 @@
 #include <SDL.h>
 #include <SDL_opengl.h>
 
+#include "net.hpp"
+
 #include <cassert>
 #include <cstdint>
 
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 class Menu final {
 	bool open;
@@ -120,9 +126,14 @@ public:
 class Engine final {
 	char buf_ip[32];
 	uint16_t ip_port;
+	uint16_t poke_addr;
+	uint8_t poke_val;
 	MOS6510 mpu;
+	Net net;
+	std::unique_ptr<TcpSocket> sock;
+	std::vector<uint8_t> data;
 public:
-	Engine() : buf_ip("192.168.2.64"), ip_port(6510), mpu() {}
+	Engine() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), mpu(), net(), sock(), data() {}
 
 	void display();
 	void show_menubar();
@@ -148,9 +159,54 @@ void Engine::show_u1541() {
 	if (!f)
 		return;
 
+	uint16_t step = 1;
+	uint8_t step2 = 1;
+
 	ImGui::InputText("IP address", buf_ip, sizeof buf_ip);
-	ImGui::InputScalar("IP port", ImGuiDataType_U16, &ip_port);
-	f.btn("Connect");
+	ImGui::InputScalar("IP port", ImGuiDataType_U16, &ip_port, &step);
+
+	if (sock.get()) {
+		if (f.btn("Disconnect"))
+			sock.reset();
+
+		if (f.btn("Reset")) {
+			data.clear();
+			data.emplace_back(0xff04 & 0xff);
+			data.emplace_back(0xff04 >> 8);
+			data.emplace_back(0);
+			data.emplace_back(0);
+
+			sock->send_fully(data.data(), data.size());
+		}
+
+		ImGui::InputScalar("Poke address", ImGuiDataType_U16, &poke_addr, &step);
+		ImGui::InputScalar("Poke value", ImGuiDataType_U8, &poke_val, &step);
+
+		if (f.btn("Poke")) {
+			data.clear();
+			data.emplace_back(0xff06 & 0xff);
+			data.emplace_back(0xff06 >> 8);
+
+			unsigned size = 3;
+
+			data.emplace_back(size & 0xff);
+			data.emplace_back(size >> 8);
+
+			// 3 bytes
+			data.emplace_back(poke_addr & 0xff);
+			data.emplace_back(poke_addr >> 8);
+			data.emplace_back(poke_val);
+
+			sock->send_fully(data.data(), data.size());
+		}
+	} else if (f.btn("Connect")) {
+		try {
+			sock.reset(new TcpSocket());
+			sock->connect(buf_ip, ip_port);
+		} catch (const std::runtime_error &e) {
+			fprintf(stderr, "%s: %s\n", __func__, e.what());
+		}
+	}
 }
 
 void Engine::show_mpu() {
