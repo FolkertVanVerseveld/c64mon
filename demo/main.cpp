@@ -19,6 +19,8 @@
 #include <cassert>
 #include <cstdint>
 
+#include <array>
+
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -96,7 +98,7 @@ public:
 	uint8_t y;
 	uint8_t x;
 	uint16_t pc;
-	uint16_t sp : 9;
+	uint8_t sp;
 	uint16_t : 0;
 
 	unsigned carry : 1;
@@ -123,21 +125,56 @@ public:
 	}
 };
 
-class Engine final {
+class U1541;
+
+class VIC final {
+public:
+	uint8_t border;
+	uint8_t background;
+
+	VIC() : border(14), background(6) {}
+
+	void show(Frame&, U1541&);
+private:
+	void show_col(Frame&, U1541&, const char *lbl, uint16_t addr, uint8_t &v);
+};
+
+class U1541 final {
 	char buf_ip[32];
 	uint16_t ip_port;
 	uint16_t poke_addr;
 	uint8_t poke_val;
-	MOS6510 mpu;
-	Net net;
+	bool autopoke;
 	std::unique_ptr<TcpSocket> sock;
 	std::vector<uint8_t> data;
+
+	VIC vic;
 public:
-	Engine() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), mpu(), net(), sock(), data() {}
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), vic() {}
+
+	void show();
+	void show_connected(Frame&);
+
+	void poke(uint16_t addr, uint8_t v);
+};
+
+class Dissassembler final {
+	uint8_t op;
+	uint8_t v1, v2;
+public:
+	void show();
+};
+
+class Engine final {
+	MOS6510 mpu;
+	Net net;
+	U1541 u1541;
+	Dissassembler diss;
+public:
+	Engine() : mpu(), net(), u1541(), diss() {}
 
 	void display();
 	void show_menubar();
-	void show_u1541();
 	void show_mpu();
 };
 
@@ -154,7 +191,101 @@ void Engine::show_menubar() {
 	}
 }
 
-void Engine::show_u1541() {
+void Dissassembler::show() {
+	Frame f("Dissassembler");
+	if (!f)
+		return;
+
+	uint8_t step = 1;
+
+	ImGui::InputScalar("Opcode", ImGuiDataType_U8, &op, &step, NULL, "%02X");
+
+	switch (op) {
+	case 0x00:
+		ImGui::TextUnformatted("BRK 7");
+		break;
+	case 0x01:
+		ImGui::TextUnformatted("ORA izx 6");
+		ImGui::InputScalar("ZP index", ImGuiDataType_U8, &v1, &step, NULL, "%02X");
+		ImGui::Text("ORA ($%02X,X)", v1);
+		break;
+	case 0x02:
+	case 0x12:
+	case 0x22:
+	case 0x32:
+	case 0x42:
+	case 0x52:
+	case 0x62:
+	case 0x72:
+		ImGui::TextUnformatted("KIL");
+		ImGui::TextWrapped("%s", "this opcode will lock up the CPU");
+		break;
+	default:
+		ImGui::TextUnformatted("unknown opcode");
+		break;
+	}
+}
+
+std::array<std::string, 16> vic_colors{ "black", "white", "red", "cyan", "magenta", "green", "blue", "yellow", "orange", "brown", "purple", "dark gray", "medium gray", "light green", "light blue", "light gray"};
+
+void VIC::show(Frame &f, U1541 &c64) {
+	ImGui::TextUnformatted("VIC");
+
+	show_col(f, c64, "Border color", 0xd020, border);
+	show_col(f, c64, "Background color", 0xd021, background);
+}
+
+void VIC::show_col(Frame &f, U1541 &c64, const char *lbl, uint16_t addr, uint8_t &v) {
+	uint8_t step = 1;
+	if (ImGui::InputScalar(lbl, ImGuiDataType_U8, &v, &step, NULL, "%02X"))
+		c64.poke(addr, v);
+
+	f.sl();
+	ImGui::Text("(%s)", vic_colors[v % vic_colors.size()].c_str());
+}
+
+void U1541::show_connected(Frame &f) {
+	if (f.btn("Disconnect"))
+		sock.reset();
+
+	if (f.btn("Reset")) {
+		data.clear();
+		data.emplace_back(0xff04 & 0xff);
+		data.emplace_back(0xff04 >> 8);
+		data.emplace_back(0);
+		data.emplace_back(0);
+
+		sock->send_fully(data.data(), data.size());
+	}
+
+	uint16_t step = 1;
+	uint8_t step2 = 1;
+
+	ImGui::InputScalar("Poke address", ImGuiDataType_U16, &poke_addr, &step, NULL, "%04X");
+
+	if (ImGui::InputScalar("Poke value", ImGuiDataType_U8, &poke_val, &step2, NULL, "%02X") && autopoke)
+		poke(poke_addr, poke_val);
+
+	if (f.btn("Poke"))
+		poke(poke_addr, poke_val);
+
+	f.sl();
+	ImGui::Checkbox("Autopoke", &autopoke);
+
+	if (f.btn("DEC"))
+		poke(poke_addr, --poke_val);
+
+	f.sl();
+
+	if (f.btn("INC"))
+		poke(poke_addr, ++poke_val);
+
+	ImGui::Separator();
+
+	vic.show(f, *this);
+}
+
+void U1541::show() {
 	Frame f("Ultimate 1541 interface");
 	if (!f)
 		return;
@@ -166,39 +297,7 @@ void Engine::show_u1541() {
 	ImGui::InputScalar("IP port", ImGuiDataType_U16, &ip_port, &step);
 
 	if (sock.get()) {
-		if (f.btn("Disconnect"))
-			sock.reset();
-
-		if (f.btn("Reset")) {
-			data.clear();
-			data.emplace_back(0xff04 & 0xff);
-			data.emplace_back(0xff04 >> 8);
-			data.emplace_back(0);
-			data.emplace_back(0);
-
-			sock->send_fully(data.data(), data.size());
-		}
-
-		ImGui::InputScalar("Poke address", ImGuiDataType_U16, &poke_addr, &step);
-		ImGui::InputScalar("Poke value", ImGuiDataType_U8, &poke_val, &step);
-
-		if (f.btn("Poke")) {
-			data.clear();
-			data.emplace_back(0xff06 & 0xff);
-			data.emplace_back(0xff06 >> 8);
-
-			unsigned size = 3;
-
-			data.emplace_back(size & 0xff);
-			data.emplace_back(size >> 8);
-
-			// 3 bytes
-			data.emplace_back(poke_addr & 0xff);
-			data.emplace_back(poke_addr >> 8);
-			data.emplace_back(poke_val);
-
-			sock->send_fully(data.data(), data.size());
-		}
+		show_connected(f);
 	} else if (f.btn("Connect")) {
 		try {
 			sock.reset(new TcpSocket());
@@ -209,15 +308,37 @@ void Engine::show_u1541() {
 	}
 }
 
+void U1541::poke(uint16_t addr, uint8_t val) {
+	data.clear();
+	data.emplace_back(0xff06 & 0xff);
+	data.emplace_back(0xff06 >> 8);
+
+	unsigned size = 3;
+
+	data.emplace_back(size & 0xff);
+	data.emplace_back(size >> 8);
+
+	// 3 bytes
+	data.emplace_back(addr & 0xff);
+	data.emplace_back(addr >> 8);
+	data.emplace_back(val);
+
+	sock->send_fully(data.data(), data.size());
+}
+
 void Engine::show_mpu() {
 	Frame f("CPU");
 	if (!f)
 		return;
 
-	ImGui::InputScalar("Accumulator", ImGuiDataType_U8, &mpu.acc);
-	ImGui::InputScalar("X index", ImGuiDataType_U8, &mpu.x);
-	ImGui::InputScalar("Y index", ImGuiDataType_U8, &mpu.y);
-	ImGui::InputScalar("Program Counter", ImGuiDataType_U16, &mpu.pc);
+	uint8_t step = 1;
+	uint16_t step2 = 1;
+
+	ImGui::InputScalar("Accumulator", ImGuiDataType_U8, &mpu.acc, &step, NULL, "%02X");
+	ImGui::InputScalar("X index", ImGuiDataType_U8, &mpu.x, &step, NULL, "%02X");
+	ImGui::InputScalar("Y index", ImGuiDataType_U8, &mpu.y, &step, NULL, "%02X");
+	ImGui::InputScalar("Stack Pointer", ImGuiDataType_U8, &mpu.sp, &step, NULL, "%02X");
+	ImGui::InputScalar("Program Counter", ImGuiDataType_U16, &mpu.pc, &step2, NULL, "%04X");
 
 	unsigned psw = mpu.psw();
 
@@ -230,12 +351,13 @@ void Engine::show_mpu() {
 	if (f.btn(psw & (1 << 1) ? "Z" : "z")) mpu.zero ^= 1; f.sl();
 	if (f.btn(psw & (1 << 0) ? "C" : "c")) mpu.carry ^= 1; f.sl();
 
-	ImGui::Text("%X", psw);
+	ImGui::Text("%02X", psw);
 }
 
 void Engine::display() {
 	show_menubar();
-	show_u1541();
+	u1541.show();
+	diss.show();
 	show_mpu();
 }
 
