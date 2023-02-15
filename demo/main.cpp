@@ -27,6 +27,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <algorithm>
 
 class Menu final {
 	bool open;
@@ -99,7 +100,6 @@ public:
 	uint8_t x;
 	uint16_t pc;
 	uint8_t sp;
-	uint16_t : 0;
 
 	unsigned carry : 1;
 	unsigned zero : 1;
@@ -131,12 +131,23 @@ class VIC final {
 public:
 	uint8_t border;
 	uint8_t background;
+	int combo_bank, combo_charrom, combo_scrptr;
+	std::vector<std::string> charrom_items, scrptr_items;
+	U1541 &c64;
+	bool autoreset;
 
-	VIC() : border(14), background(6) {}
+	VIC(U1541 &c64) : border(14), background(6), combo_bank(0), combo_charrom(2), combo_scrptr(1), charrom_items(), scrptr_items(), c64(c64), autoreset(true) {
+		load_memsetup();
+	}
 
-	void show(Frame&, U1541&);
+	void reset();
+
+	void show(Frame&);
 private:
-	void show_col(Frame&, U1541&, const char *lbl, uint16_t addr, uint8_t &v);
+	void change_bank(int i);
+	void load_memsetup();
+	void store_memsetup();
+	void show_col(Frame&, const char *lbl, uint16_t addr, uint8_t &v);
 };
 
 class U1541 final {
@@ -150,7 +161,7 @@ class U1541 final {
 
 	VIC vic;
 public:
-	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), vic() {}
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), vic(*this) {}
 
 	void show();
 	void show_connected(Frame&);
@@ -228,14 +239,100 @@ void Dissassembler::show() {
 
 std::array<std::string, 16> vic_colors{ "black", "white", "red", "cyan", "magenta", "green", "blue", "yellow", "orange", "brown", "purple", "dark gray", "medium gray", "light green", "light blue", "light gray"};
 
-void VIC::show(Frame &f, U1541 &c64) {
-	ImGui::TextUnformatted("VIC");
+std::array<const char*, 4> vic_banks{ "$0000-$3FFF", "$4000-$7FFF", "$8000-$BFFF", "$C000-$FFFF" };
 
-	show_col(f, c64, "Border color", 0xd020, border);
-	show_col(f, c64, "Background color", 0xd021, background);
+bool combo_vec(void *data, int idx, const char **out_text) {
+	std::vector<std::string> &vec = *(std::vector<std::string>*)data;
+
+	if (idx < 0 || idx >= vec.size())
+		return false;
+
+	*out_text = vec.at(idx).c_str();
+	return true;
 }
 
-void VIC::show_col(Frame &f, U1541 &c64, const char *lbl, uint16_t addr, uint8_t &v) {
+void VIC::change_bank(int i) {
+	combo_bank = std::clamp<int>(i, 0, vic_banks.size() - 1);
+	int bank = 3 - combo_bank;
+
+	c64.poke(0xdd00, bank & 0x3);
+}
+
+void VIC::reset() {
+	if (!autoreset)
+		return;
+
+	border = 14;
+	background = 6;
+	combo_bank = 0;
+	combo_charrom = 2;
+	combo_scrptr = 1;
+	load_memsetup();
+}
+
+void VIC::show(Frame &f) {
+	ImGui::TextUnformatted("VIC");
+
+	show_col(f, "Border color", 0xd020, border);
+	show_col(f, "Background color", 0xd021, background);
+
+	uint8_t step = 1;
+
+	if (ImGui::Combo("Bank", &combo_bank, vic_banks.data(), vic_banks.size())) {
+		change_bank(combo_bank);
+		load_memsetup();
+	}
+
+	if (ImGui::Combo("Character memory", &combo_charrom, combo_vec, &charrom_items, charrom_items.size())) {
+		store_memsetup();
+	}
+
+	if (ImGui::Combo("Screen pointer", &combo_scrptr, combo_vec, &scrptr_items, scrptr_items.size())) {
+		store_memsetup();
+	}
+
+	ImGui::Checkbox("Reset on C64 Reset", &autoreset);
+	f.sl();
+
+	if (f.btn("Poke all values")) {
+		c64.poke(0xd020, border);
+		c64.poke(0xd021, background);
+		store_memsetup();
+	}
+}
+
+void VIC::store_memsetup() {
+	combo_charrom = std::clamp<int>(combo_charrom, 0, charrom_items.size());
+	combo_scrptr = std::clamp<int>(combo_scrptr, 0, scrptr_items.size());
+
+	uint8_t v = 0;
+
+	v |= ((unsigned)combo_charrom) << 1u;
+	v |= ((unsigned)combo_scrptr) << 4u;
+
+	c64.poke(0xd018, v);
+}
+
+void VIC::load_memsetup() {
+	uint16_t base = (unsigned)combo_bank * 0x4000;
+
+	charrom_items.clear();
+	scrptr_items.clear();
+
+	char buf[32];
+
+	for (unsigned i = 0; i < 8; ++i) {
+		snprintf(buf, sizeof buf, "$%04X-$%04X", base + 0x800 * i, base + 0x800 * (i + 1) - 1);
+		charrom_items.emplace_back(buf);
+	}
+
+	for (unsigned i = 0; i < 16; ++i) {
+		snprintf(buf, sizeof buf, "$%04X-$%04X", base + 0x400 * i, base + 0x400 * (i + 1) - 1);
+		scrptr_items.emplace_back(buf);
+	}
+}
+
+void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 	uint8_t step = 1;
 	if (ImGui::InputScalar(lbl, ImGuiDataType_U8, &v, &step, NULL, "%02X"))
 		c64.poke(addr, v);
@@ -256,6 +353,7 @@ void U1541::show_connected(Frame &f) {
 		data.emplace_back(0);
 
 		sock->send_fully(data.data(), data.size());
+		vic.reset();
 	}
 
 	uint16_t step = 1;
@@ -282,7 +380,7 @@ void U1541::show_connected(Frame &f) {
 
 	ImGui::Separator();
 
-	vic.show(f, *this);
+	vic.show(f);
 }
 
 void U1541::show() {
@@ -293,10 +391,14 @@ void U1541::show() {
 	uint16_t step = 1;
 	uint8_t step2 = 1;
 
+	bool connected = sock.get() != nullptr;
+
+	if (connected) ImGui::BeginDisabled();
 	ImGui::InputText("IP address", buf_ip, sizeof buf_ip);
 	ImGui::InputScalar("IP port", ImGuiDataType_U16, &ip_port, &step);
+	if (connected) ImGui::EndDisabled();
 
-	if (sock.get()) {
+	if (connected) {
 		show_connected(f);
 	} else if (f.btn("Connect")) {
 		try {
@@ -382,7 +484,7 @@ int main(int, char**)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 	SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-	SDL_Window *window = SDL_CreateWindow("F4CG code tool", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
+	SDL_Window *window = SDL_CreateWindow("Commodore 64 code monitor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
 	SDL_GLContext gl_context = SDL_GL_CreateContext(window);
 	SDL_GL_MakeCurrent(window, gl_context);
 	SDL_GL_SetSwapInterval(1); // Enable vsync

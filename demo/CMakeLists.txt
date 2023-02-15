@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.7)
 
-project(F4CG)
+project(C64MON)
 
 # Set to TRUE to use tracy profiler framework
 set(PROFILING FALSE)
@@ -29,11 +29,8 @@ file(GLOB IMGUI_CORE_SRC "../imgui/*.cpp")
 set(IMGUI_BACKEND_SRC "../imgui/backends/imgui_impl_sdl.cpp" "../imgui/backends/imgui_impl_opengl2.cpp")
 set(IMGUI_SRC ${IMGUI_CORE_SRC} ${IMGUI_BACKEND_SRC})
 
-file(GLOB F4CG_DLLS "*.dll")
-file(COPY ${F4CG_DLLS} DESTINATION ${CMAKE_BINARY_DIR})
-
 include_directories("../imgui/" "../imgui/backends" ${SDL2_INCLUDE_DIRS} "../tracy/public")
 
-add_executable(f4cg "main.cpp" ${DEMO_SRC} ${IMGUI_SRC} ${PROFILE_SOURCES})
+add_executable(c64mon "main.cpp" ${DEMO_SRC} ${IMGUI_SRC} ${PROFILE_SOURCES})
 
-target_link_libraries(f4cg ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_MIXER_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(c64mon ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_MIXER_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})

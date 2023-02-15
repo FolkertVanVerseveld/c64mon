@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.7)
 
-project(F4CG)
+project(C64MON)
 
 # Set to TRUE to use tracy profiler framework
 set(PROFILING FALSE)
