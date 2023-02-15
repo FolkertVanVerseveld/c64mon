@@ -13,7 +13,7 @@
 #define SOCKET_ERROR (-1)
 #endif
 
-#if 0
+#if _WIN32
 // process and throw error message. always throws
 static void wsa_generic_error(const char *prefix, int code) noexcept(false)
 {
