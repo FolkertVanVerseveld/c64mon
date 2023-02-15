@@ -2,6 +2,14 @@
 
 #if _WIN32
 #include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+
+typedef int SOCKET;
+
+#define INVALID_SOCKET (-1)
 #endif
 
 #include <cstdint>

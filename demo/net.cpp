@@ -6,8 +6,14 @@
 #include <ws2tcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <string.h>
+#include <unistd.h>
+
+#define SOCKET_ERROR (-1)
 #endif
 
+#if 0
 // process and throw error message. always throws
 static void wsa_generic_error(const char *prefix, int code) noexcept(false)
 {
@@ -76,6 +82,10 @@ Net::~Net() {
 	case WSAEINPROGRESS: fprintf(stderr, "%s: winsock is blocked\n", __func__); break;
 	}
 }
+#else
+Net::Net() {}
+Net::~Net() {}
+#endif
 
 TcpSocket::TcpSocket() : s((int)INVALID_SOCKET) {
 	SOCKET sock;
@@ -87,13 +97,17 @@ TcpSocket::TcpSocket() : s((int)INVALID_SOCKET) {
 }
 
 TcpSocket::~TcpSocket() {
+#if _WIN32
 	// https://docs.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-closesocket
 	closesocket(s);
+#else
+	::close(s);
+#endif
 }
 
 void TcpSocket::connect(const char *address, uint16_t port) {
 	const auto sock = s.load(std::memory_order_relaxed);
-	sockaddr_in dst{ 0 };
+	struct sockaddr_in dst{ 0 };
 
 	dst.sin_family = AF_INET;
 	dst.sin_addr.s_addr = inet_addr(address);
@@ -105,12 +119,16 @@ void TcpSocket::connect(const char *address, uint16_t port) {
 	if (r == 0)
 		return;
 
+#if _WIN32
 	if (r != SOCKET_ERROR)
 		throw std::runtime_error(std::string("wsa: bind failed: unknown return code ") + std::to_string(r));
 
 	int err = WSAGetLastError();
 
 	throw std::runtime_error(std::string("wsa: bind failed: code ") + std::to_string(err));
+#else
+	throw std::runtime_error(std::string("net: bind failed: ") + strerror(errno));
+#endif
 }
 
 int TcpSocket::try_send(const void *ptr, int len, unsigned tries) noexcept {
@@ -142,6 +160,7 @@ int TcpSocket::send(const void *ptr, int len, unsigned tries) {
 	if (out != SOCKET_ERROR && out >= 0)
 		return out;
 
+#if _WIN32
 	int err = WSAGetLastError();
 
 	switch (err) {
@@ -151,13 +170,21 @@ int TcpSocket::send(const void *ptr, int len, unsigned tries) {
 			wsa_generic_error("wsa: send failed", err);
 			break;
 	}
+#else
+	switch (errno) {
+		case 0:
+			throw std::runtime_error(std::string("net: send failed: unknown return code ") + std::to_string(out));
+		default:
+			throw std::runtime_error(std::string("net: send failed: ") + strerror(errno));
+	}
+#endif
 
 	return out;
 }
 
 void TcpSocket::send_fully(const void *ptr, int len) {
 	int out;
-	
+
 	if ((out = send(ptr, len, 0)) == len)
 		return;
 
@@ -199,12 +226,21 @@ int TcpSocket::recv(void *dst, int len, unsigned tries) {
 	if (in != SOCKET_ERROR && in >= 0)
 		return in;
 
+#if _WIN32
 	int err = WSAGetLastError();
 
 	if (!err && in < 0)
 		throw std::runtime_error(std::string("wsa: recv failed: unknown return code ") + std::to_string(in));
 
 	wsa_generic_error("wsa: recv failed", err);
+#else
+	int err = errno;
+
+	if (!err && in < 0)
+		throw std::runtime_error(std::string("net: recv failed: unknown return code ") + std::to_string(in));
+
+	throw std::runtime_error(std::string("net: recv failed: ") + strerror(errno));
+#endif
 
 	return in;
 }
