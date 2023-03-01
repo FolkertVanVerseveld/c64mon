@@ -29,6 +29,13 @@
 #include <vector>
 #include <algorithm>
 
+#include <iostream>
+#include <fstream>
+#include <stdexcept>
+#include <cstdio>
+
+#include "imfilebrowser.h"
+
 class Menu final {
 	bool open;
 public:
@@ -158,15 +165,25 @@ class U1541 final {
 	bool autopoke;
 	std::unique_ptr<TcpSocket> sock;
 	std::vector<uint8_t> data;
+	char keybuf[40];
 
 	VIC vic;
+	ImGui::FileBrowser fb_prg;
+	std::string prg_path;
+	std::vector<uint8_t> prg_data;
 public:
-	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), vic(*this) {}
+	static constexpr unsigned max_prg_size = 52 * 1024 + 2;
+
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg_path(), prg_data() {}
 
 	void show();
 	void show_connected(Frame&);
 
 	void poke(uint16_t addr, uint8_t v);
+	void kbp(const char *str);
+
+	void load_prg(const std::string&);
+	void send_prg(const std::vector<uint8_t>&);
 };
 
 class Dissassembler final {
@@ -341,6 +358,31 @@ void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 	ImGui::Text("(%s)", vic_colors[v % vic_colors.size()].c_str());
 }
 
+void U1541::load_prg(const std::string &path) {
+	printf("prg path: %s\n", path.c_str());
+
+	try {
+		std::ifstream in(path, std::ios::binary);
+		in.exceptions(std::ifstream::failbit);
+
+		in.seekg(0, std::ios_base::end);
+		size_t end = in.tellg();
+		in.seekg(0);
+		size_t begin = in.tellg();
+
+		size_t size = end - begin;
+
+		printf("prg size: %zu\n", size);
+
+		prg_path = path;
+
+		prg_data.resize(size);
+		in.read((char*)prg_data.data(), size);
+	} catch (const std::runtime_error &e) {
+		fprintf(stderr, "%s: %s\n", __func__, e.what());
+	}
+}
+
 void U1541::show_connected(Frame &f) {
 	if (f.btn("Disconnect"))
 		sock.reset();
@@ -377,6 +419,30 @@ void U1541::show_connected(Frame &f) {
 
 	if (f.btn("INC"))
 		poke(poke_addr, ++poke_val);
+
+	if (f.btn("A"))
+		kbp("A");
+
+	if (f.btn("Load PRG"))
+		fb_prg.Open();
+
+	fb_prg.Display();
+
+	if (fb_prg.HasSelected()) {
+		load_prg(fb_prg.GetSelected().string());
+		fb_prg.ClearSelected();
+	}
+
+	if (prg_data.size() > 2) {
+		if (f.btn("Start PRG"))
+			send_prg(prg_data);
+	}
+
+	ImGui::InputText("Text", keybuf, sizeof keybuf);
+	if (f.btn("Type")) {
+		keybuf[(sizeof keybuf) - 1] = '\0';
+		kbp(keybuf);
+	}
 
 	ImGui::Separator();
 
@@ -424,6 +490,40 @@ void U1541::poke(uint16_t addr, uint8_t val) {
 	data.emplace_back(addr & 0xff);
 	data.emplace_back(addr >> 8);
 	data.emplace_back(val);
+
+	sock->send_fully(data.data(), data.size());
+}
+
+void U1541::kbp(const char *str) {
+	data.clear();
+	data.emplace_back(0xff03 & 0xff);
+	data.emplace_back(0xff03 >> 8);
+
+	unsigned size = strlen(str);
+
+	data.emplace_back(size & 0xff);
+	data.emplace_back(size >> 8);
+
+	for (unsigned i = 0; i < size; ++i)
+		data.emplace_back(str[i]);
+
+	sock->send_fully(data.data(), data.size());
+}
+
+void U1541::send_prg(const std::vector<uint8_t> &prg) {
+	if (prg.size() >= max_prg_size)
+		throw std::runtime_error("prg too big");
+
+	data.clear();
+	data.emplace_back(0xff02 & 0xff);
+	data.emplace_back(0xff02 >> 8);
+
+	unsigned size = prg.size();
+
+	data.emplace_back(size & 0xff);
+	data.emplace_back(size >> 8);
+
+	data.insert(data.end(), prg.begin(), prg.end());
 
 	sock->send_fully(data.data(), data.size());
 }

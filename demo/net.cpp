@@ -7,6 +7,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 #else
+#include <errno.h>
 #include <string.h>
 #include <unistd.h>
 
