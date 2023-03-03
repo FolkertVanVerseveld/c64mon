@@ -329,10 +329,21 @@ static ImU8 prg_readfn(const ImU8 *ptr, size_t off) {
 
 	off += 2;
 
-	if (off < base || off >= base + prg.data.size())
+	if (off < base + 2 || off >= base + prg.data.size())
 		return 0;
 
 	return prg.data.at(off - base);
+}
+
+static void prg_writefn(ImU8 *ptr, size_t off, ImU8 v) {
+	PRG &prg = *(PRG*)ptr;
+
+	size_t base = prg.load_address() - prg_align16_base(prg);
+
+	if (off < base || off >= base + prg.data.size() - 2)
+		return; // ignore write
+
+	prg.data.at(off - base + 2) = v;
 }
 
 void U1541::show_prg_control() {
@@ -385,14 +396,14 @@ void U1541::show_prg_control() {
 		ImGui::Separator();
 
 		prg_edit.ReadFn = NULL;
-		prg_edit.ReadOnly = false;
+		prg_edit.WriteFn = NULL;
 
 		if (prg_view_raw) {
 			prg_edit.DrawContents(prg.data.data(), prg.data.size());
 		} else {
 			if (prg_align16) {
 				prg_edit.ReadFn = prg_readfn;
-				prg_edit.ReadOnly = true;
+				prg_edit.WriteFn = prg_writefn;
 				prg_edit.DrawContents(&prg, prg_align16_end(prg), prg_align16_base(prg));
 			} else {
 				prg_edit.DrawContents(prg.data.data() + 2, prg.data.size() - 2, prg.load_address());
