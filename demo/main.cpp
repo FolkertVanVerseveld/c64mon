@@ -30,13 +30,13 @@
 #include <algorithm>
 
 #include <iostream>
-#include <fstream>
-#include <stdexcept>
 #include <cstdio>
 
 #include "imfilebrowser.h"
+#include "imgui_memory_editor.h"
 
 #include "ui.hpp"
+#include "prg.hpp"
 
 class MOS6510 final {
 public:
@@ -95,22 +95,6 @@ private:
 	void show_col(Frame&, const char *lbl, uint16_t addr, uint8_t &v);
 };
 
-class PRG final {
-public:
-	std::string path;
-	std::vector<uint8_t> data;
-
-	static constexpr unsigned min_prg_size = 2;
-	static constexpr unsigned max_prg_size = min_prg_size + 52 * 1024;
-
-	PRG() : path(""), data() {}
-
-	bool is_valid() const noexcept { return data.size() >= min_prg_size; }
-
-	void load(const std::string&);
-	void store(std::vector<uint8_t>&);
-};
-
 class U1541 final {
 	char buf_ip[32];
 	uint16_t ip_port;
@@ -124,8 +108,9 @@ class U1541 final {
 	VIC vic;
 	ImGui::FileBrowser fb_prg;
 	PRG prg;
+	MemoryEditor prg_edit;
 public:
-	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg() {}
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg(), prg_edit() {}
 
 	void show();
 	void show_connected(Frame&);
@@ -176,7 +161,7 @@ void Engine::show_menubar() {
 	{
 		auto m = mmb.menu("View");
 		if (m) {
-			auto m2 = mmb.menu("Debug/Testing widgets");
+			auto m2 = mmb.menu("Work in progress widgets");
 			if (m2) {
 				m2->chkbox("Dissassembler", show_diss);
 				m2->chkbox("Demo window", show_demo_window);
@@ -327,42 +312,6 @@ void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 	ImGui::Text("(%s)", vic_colors[v % vic_colors.size()].c_str());
 }
 
-void PRG::load(const std::string &path) {
-	//printf("prg path: %s\n", path.c_str());
-
-	try {
-		std::ifstream in(path, std::ios::binary);
-		in.exceptions(std::ifstream::failbit);
-
-		in.seekg(0, std::ios_base::end);
-		size_t end = in.tellg();
-		in.seekg(0);
-		size_t begin = in.tellg();
-
-		size_t size = end - begin;
-
-		//printf("prg size: %zu\n", size);
-
-		this->path = path;
-		this->data.resize(size);
-		in.read((char*)this->data.data(), size);
-	} catch (const std::runtime_error &e) {
-		fprintf(stderr, "%s: %s\n", __func__, e.what());
-	}
-}
-
-void PRG::store(std::vector<uint8_t> &out) {
-	if (out.size() >= PRG::max_prg_size)
-		throw std::runtime_error("prg too big");
-
-	unsigned size = data.size();
-
-	out.emplace_back(size & 0xff);
-	out.emplace_back(size >> 8);
-
-	out.insert(out.end(), data.begin(), data.end());
-}
-
 void U1541::show_prg_control() {
 	Frame f("PRG control");
 
@@ -399,7 +348,13 @@ void U1541::show_prg_control() {
 			send_prg();
 
 		unsigned sz = prg.data.size();
-		ImGui::Text("Size: %u %s (0x%X)", sz, sz == 1 ? "byte" : "bytes", sz);
+		ImGui::Text("Size   : %u %s ($%X)", sz, sz == 1 ? "byte" : "bytes", sz);
+		ImGui::Text("Load at: $%04X", prg.load_address());
+
+		ImGui::TextUnformatted("Raw PRG data:");
+		ImGui::Separator();
+
+		prg_edit.DrawContents(prg.data.data(), prg.data.size());
 	}
 }
 
@@ -440,10 +395,10 @@ void U1541::show_connected(Frame &f) {
 	if (f.btn("INC"))
 		poke(poke_addr, ++poke_val);
 
+#if 0
 	if (f.btn("A"))
 		kbp("A");
-
-	show_prg_control();
+#endif
 
 	ImGui::InputText("Text", keybuf, sizeof keybuf);
 	if (f.btn("Type")) {
@@ -452,6 +407,7 @@ void U1541::show_connected(Frame &f) {
 	}
 
 	vic.show();
+	show_prg_control();
 }
 
 void U1541::show() {
@@ -559,7 +515,7 @@ void Engine::display() {
 	if (show_diss)
 		diss.show();
 
-	show_mpu();
+	//show_mpu();
 
 	if (show_demo_window)
 		ImGui::ShowDemoWindow(&show_demo_window);
