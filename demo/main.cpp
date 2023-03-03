@@ -109,8 +109,9 @@ class U1541 final {
 	ImGui::FileBrowser fb_prg;
 	PRG prg;
 	MemoryEditor prg_edit;
+	bool prg_view_raw, prg_align16;
 public:
-	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg(), prg_edit() {}
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg(), prg_edit(), prg_view_raw(true), prg_align16(true) {}
 
 	void show();
 	void show_connected(Frame&);
@@ -312,6 +313,28 @@ void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 	ImGui::Text("(%s)", vic_colors[v % vic_colors.size()].c_str());
 }
 
+static uint16_t prg_align16_base(const PRG &prg) {
+	uint16_t base = prg.load_address();
+	return (uint16_t)(16u * (base / 16u));
+}
+
+static size_t prg_align16_end(const PRG &prg) {
+	return (prg.data.size() + 16 - 1) / 16 * 16;
+}
+
+static ImU8 prg_readfn(const ImU8 *ptr, size_t off) {
+	const PRG &prg = *(const PRG*)ptr;
+
+	uint16_t base = prg.load_address() - prg_align16_base(prg);
+
+	off += 2;
+
+	if (off < base || off >= base + prg.data.size())
+		return 0;
+
+	return prg.data.at(off - base);
+}
+
 void U1541::show_prg_control() {
 	Frame f("PRG control");
 
@@ -351,10 +374,30 @@ void U1541::show_prg_control() {
 		ImGui::Text("Size   : %u %s ($%X)", sz, sz == 1 ? "byte" : "bytes", sz);
 		ImGui::Text("Load at: $%04X", prg.load_address());
 
-		ImGui::TextUnformatted("Raw PRG data:");
+		ImGui::Checkbox("Raw PRG view", &prg_view_raw);
+
+		if (!prg_view_raw) {
+			f.sl();
+			ImGui::Checkbox("Align address to 16 bytes", &prg_align16);
+		}
+
+		ImGui::TextUnformatted("PRG data:");
 		ImGui::Separator();
 
-		prg_edit.DrawContents(prg.data.data(), prg.data.size());
+		prg_edit.ReadFn = NULL;
+		prg_edit.ReadOnly = false;
+
+		if (prg_view_raw) {
+			prg_edit.DrawContents(prg.data.data(), prg.data.size());
+		} else {
+			if (prg_align16) {
+				prg_edit.ReadFn = prg_readfn;
+				prg_edit.ReadOnly = true;
+				prg_edit.DrawContents(&prg, prg_align16_end(prg), prg_align16_base(prg));
+			} else {
+				prg_edit.DrawContents(prg.data.data() + 2, prg.data.size() - 2, prg.load_address());
+			}
+		}
 	}
 }
 
