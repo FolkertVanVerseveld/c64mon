@@ -85,7 +85,7 @@ public:
 
 	Frame(const char *lbl) : open(ImGui::Begin(lbl)), lbl(lbl) {}
 	Frame(const Frame&) = delete;
-	Frame(Frame &&f) noexcept : open(std::exchange(f.open, false)), lbl(lbl) {}
+	Frame(Frame &&f) noexcept : open(std::exchange(f.open, false)), lbl(f.lbl) {}
 
 	~Frame() {
 		ImGui::End();
@@ -149,7 +149,7 @@ public:
 
 	void reset();
 
-	void show(Frame&);
+	void show();
 private:
 	void change_bank(int i);
 	void load_memsetup();
@@ -165,19 +165,22 @@ class U1541 final {
 	bool autopoke;
 	std::unique_ptr<TcpSocket> sock;
 	std::vector<uint8_t> data;
-	char keybuf[40];
+	char keybuf[6];
 
 	VIC vic;
 	ImGui::FileBrowser fb_prg;
 	std::string prg_path;
 	std::vector<uint8_t> prg_data;
 public:
-	static constexpr unsigned max_prg_size = 52 * 1024 + 2;
+	static constexpr unsigned min_prg_size = 2;
+	static constexpr unsigned max_prg_size = min_prg_size + 52 * 1024;
 
-	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg_path(), prg_data() {}
+	U1541() : buf_ip("192.168.2.64"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg_path(), prg_data() {}
 
 	void show();
 	void show_connected(Frame&);
+
+	void show_prg_control();
 
 	void poke(uint16_t addr, uint8_t v);
 	void kbp(const char *str);
@@ -211,12 +214,13 @@ void Engine::show_menubar() {
 	if (!mmb)
 		return;
 
-	//Menu mf("File");
+	#if 0
 	auto m = mmb.menu("File");
 	if (m) {
 		if (m->item("Quit"))
 			throw 0;
 	}
+	#endif
 }
 
 void Dissassembler::show() {
@@ -287,8 +291,11 @@ void VIC::reset() {
 	load_memsetup();
 }
 
-void VIC::show(Frame &f) {
-	ImGui::TextUnformatted("VIC");
+void VIC::show() {
+	Frame f("VIC");
+
+	if (!f)
+		return;
 
 	show_col(f, "Border color", 0xd020, border);
 	show_col(f, "Background color", 0xd021, background);
@@ -359,7 +366,7 @@ void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 }
 
 void U1541::load_prg(const std::string &path) {
-	printf("prg path: %s\n", path.c_str());
+	//printf("prg path: %s\n", path.c_str());
 
 	try {
 		std::ifstream in(path, std::ios::binary);
@@ -372,7 +379,7 @@ void U1541::load_prg(const std::string &path) {
 
 		size_t size = end - begin;
 
-		printf("prg size: %zu\n", size);
+		//printf("prg size: %zu\n", size);
 
 		prg_path = path;
 
@@ -380,6 +387,43 @@ void U1541::load_prg(const std::string &path) {
 		in.read((char*)prg_data.data(), size);
 	} catch (const std::runtime_error &e) {
 		fprintf(stderr, "%s: %s\n", __func__, e.what());
+	}
+}
+
+void U1541::show_prg_control() {
+	Frame f("PRG control");
+
+	if (!f)
+		return;
+
+	if (prg_data.size() > min_prg_size) {
+		if (f.btn("Reload PRG"))
+			load_prg(prg_path);
+
+		f.sl();
+
+		if (f.btn("Reload and Start PRG")) {
+			load_prg(prg_path);
+			if (prg_data.size() > min_prg_size)
+				send_prg(prg_data);
+		}
+	}
+
+	if (f.btn("Load PRG"))
+		fb_prg.Open();
+
+	fb_prg.Display();
+
+	if (fb_prg.HasSelected()) {
+		load_prg(fb_prg.GetSelected().string());
+		fb_prg.ClearSelected();
+	}
+
+	if (prg_data.size() > min_prg_size) {
+		f.sl();
+
+		if (f.btn("Start PRG"))
+			send_prg(prg_data);
 	}
 }
 
@@ -423,20 +467,7 @@ void U1541::show_connected(Frame &f) {
 	if (f.btn("A"))
 		kbp("A");
 
-	if (f.btn("Load PRG"))
-		fb_prg.Open();
-
-	fb_prg.Display();
-
-	if (fb_prg.HasSelected()) {
-		load_prg(fb_prg.GetSelected().string());
-		fb_prg.ClearSelected();
-	}
-
-	if (prg_data.size() > 2) {
-		if (f.btn("Start PRG"))
-			send_prg(prg_data);
-	}
+	show_prg_control();
 
 	ImGui::InputText("Text", keybuf, sizeof keybuf);
 	if (f.btn("Type")) {
@@ -444,9 +475,7 @@ void U1541::show_connected(Frame &f) {
 		kbp(keybuf);
 	}
 
-	ImGui::Separator();
-
-	vic.show(f);
+	vic.show();
 }
 
 void U1541::show() {
