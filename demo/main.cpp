@@ -36,69 +36,7 @@
 
 #include "imfilebrowser.h"
 
-class Menu final {
-	bool open;
-public:
-	const std::string lbl;
-
-	Menu(const char *lbl, bool open) : open(open), lbl(lbl) {}
-	Menu(const Menu&) = delete;
-	Menu(Menu &&m) noexcept : open(std::exchange(m.open, false)), lbl(lbl) {}
-
-	~Menu() {
-		if (open)
-			ImGui::EndMenu();
-	}
-
-	constexpr operator bool() const noexcept { return open; }
-
-	bool item(const char *lbl) {
-		assert(open);
-		return ImGui::MenuItem(lbl);
-	}
-};
-
-class MainMenuBar final {
-	bool open;
-public:
-	MainMenuBar() : open(ImGui::BeginMainMenuBar()) {}
-
-	~MainMenuBar() {
-		if (open)
-			ImGui::EndMainMenuBar();
-	}
-
-	constexpr operator bool() const noexcept { return open; }
-
-	std::optional<Menu> menu(const char *lbl) {
-		if (!ImGui::BeginMenu(lbl))
-			return std::nullopt;
-
-		return Menu(lbl, true);
-	}
-};
-
-class Frame final {
-	bool open;
-public:
-	const std::string lbl;
-
-	Frame(const char *lbl) : open(ImGui::Begin(lbl)), lbl(lbl) {}
-	Frame(const Frame&) = delete;
-	Frame(Frame &&f) noexcept : open(std::exchange(f.open, false)), lbl(f.lbl) {}
-
-	~Frame() {
-		ImGui::End();
-	}
-
-	constexpr operator bool() const noexcept { return open; }
-
-	bool btn(const char *lbl) {
-		return ImGui::Button(lbl);
-	}
-
-	void sl() { ImGui::SameLine(); }
-};
+#include "ui.hpp"
 
 class MOS6510 final {
 public:
@@ -212,8 +150,10 @@ class Engine final {
 	Net net;
 	U1541 u1541;
 	Dissassembler diss;
+	bool show_diss;
+	bool show_demo_window;
 public:
-	Engine() : mpu(), net(), u1541(), diss() {}
+	Engine() : mpu(), net(), u1541(), diss(), show_diss(false), show_demo_window(false) {}
 
 	void display();
 	void show_menubar();
@@ -225,13 +165,24 @@ void Engine::show_menubar() {
 	if (!mmb)
 		return;
 
-	#if 0
-	auto m = mmb.menu("File");
-	if (m) {
-		if (m->item("Quit"))
-			throw 0;
+	{
+		auto m = mmb.menu("File");
+		if (m) {
+			if (m->item("Quit"))
+				throw 0;
+		}
 	}
-	#endif
+
+	{
+		auto m = mmb.menu("View");
+		if (m) {
+			auto m2 = mmb.menu("Debug/Testing widgets");
+			if (m2) {
+				m2->chkbox("Dissassembler", show_diss);
+				m2->chkbox("Demo window", show_demo_window);
+			}
+		}
+	}
 }
 
 void Dissassembler::show() {
@@ -418,7 +369,7 @@ void U1541::show_prg_control() {
 	if (!f)
 		return;
 
-	if (prg.data.size() > PRG::min_prg_size) {
+	if (prg.is_valid()) {
 		if (f.btn("Reload PRG"))
 			prg.load(prg.path);
 
@@ -446,6 +397,9 @@ void U1541::show_prg_control() {
 
 		if (f.btn("Start PRG"))
 			send_prg();
+
+		unsigned sz = prg.data.size();
+		ImGui::Text("Size: %u %s (0x%X)", sz, sz == 1 ? "byte" : "bytes", sz);
 	}
 }
 
@@ -601,8 +555,14 @@ void Engine::show_mpu() {
 void Engine::display() {
 	show_menubar();
 	u1541.show();
-	diss.show();
+
+	if (show_diss)
+		diss.show();
+
 	show_mpu();
+
+	if (show_demo_window)
+		ImGui::ShowDemoWindow(&show_demo_window);
 }
 
 // Main code
@@ -663,7 +623,6 @@ int main(int, char**)
 	//IM_ASSERT(font != NULL);
 
 	// Our state
-	bool show_demo_window = false;
 	ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
 	Engine eng;
@@ -692,21 +651,6 @@ int main(int, char**)
 			ImGui_ImplOpenGL2_NewFrame();
 			ImGui_ImplSDL2_NewFrame();
 			ImGui::NewFrame();
-
-			// 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-			if (show_demo_window)
-				ImGui::ShowDemoWindow(&show_demo_window);
-
-			// 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
-			{
-				ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
-
-				ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-				ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-
-				ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-				ImGui::End();
-			}
 
 			eng.display();
 
