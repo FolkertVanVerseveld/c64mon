@@ -157,6 +157,22 @@ private:
 	void show_col(Frame&, const char *lbl, uint16_t addr, uint8_t &v);
 };
 
+class PRG final {
+public:
+	std::string path;
+	std::vector<uint8_t> data;
+
+	static constexpr unsigned min_prg_size = 2;
+	static constexpr unsigned max_prg_size = min_prg_size + 52 * 1024;
+
+	PRG() : path(""), data() {}
+
+	bool is_valid() const noexcept { return data.size() >= min_prg_size; }
+
+	void load(const std::string&);
+	void store(std::vector<uint8_t>&);
+};
+
 class U1541 final {
 	char buf_ip[32];
 	uint16_t ip_port;
@@ -169,13 +185,9 @@ class U1541 final {
 
 	VIC vic;
 	ImGui::FileBrowser fb_prg;
-	std::string prg_path;
-	std::vector<uint8_t> prg_data;
+	PRG prg;
 public:
-	static constexpr unsigned min_prg_size = 2;
-	static constexpr unsigned max_prg_size = min_prg_size + 52 * 1024;
-
-	U1541() : buf_ip("192.168.2.64"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg_path(), prg_data() {}
+	U1541() : buf_ip("192.168.178.229"), ip_port(64), poke_addr(0xd020), poke_val(0), autopoke(false), sock(), data(), keybuf(), vic(*this), fb_prg(), prg() {}
 
 	void show();
 	void show_connected(Frame&);
@@ -185,8 +197,7 @@ public:
 	void poke(uint16_t addr, uint8_t v);
 	void kbp(const char *str);
 
-	void load_prg(const std::string&);
-	void send_prg(const std::vector<uint8_t>&);
+	void send_prg();
 };
 
 class Dissassembler final {
@@ -365,7 +376,7 @@ void VIC::show_col(Frame &f, const char *lbl, uint16_t addr, uint8_t &v) {
 	ImGui::Text("(%s)", vic_colors[v % vic_colors.size()].c_str());
 }
 
-void U1541::load_prg(const std::string &path) {
+void PRG::load(const std::string &path) {
 	//printf("prg path: %s\n", path.c_str());
 
 	try {
@@ -381,13 +392,24 @@ void U1541::load_prg(const std::string &path) {
 
 		//printf("prg size: %zu\n", size);
 
-		prg_path = path;
-
-		prg_data.resize(size);
-		in.read((char*)prg_data.data(), size);
+		this->path = path;
+		this->data.resize(size);
+		in.read((char*)this->data.data(), size);
 	} catch (const std::runtime_error &e) {
 		fprintf(stderr, "%s: %s\n", __func__, e.what());
 	}
+}
+
+void PRG::store(std::vector<uint8_t> &out) {
+	if (out.size() >= PRG::max_prg_size)
+		throw std::runtime_error("prg too big");
+
+	unsigned size = data.size();
+
+	out.emplace_back(size & 0xff);
+	out.emplace_back(size >> 8);
+
+	out.insert(out.end(), data.begin(), data.end());
 }
 
 void U1541::show_prg_control() {
@@ -396,16 +418,16 @@ void U1541::show_prg_control() {
 	if (!f)
 		return;
 
-	if (prg_data.size() > min_prg_size) {
+	if (prg.data.size() > PRG::min_prg_size) {
 		if (f.btn("Reload PRG"))
-			load_prg(prg_path);
+			prg.load(prg.path);
 
 		f.sl();
 
 		if (f.btn("Reload and Start PRG")) {
-			load_prg(prg_path);
-			if (prg_data.size() > min_prg_size)
-				send_prg(prg_data);
+			prg.load(prg.path);
+			if (prg.is_valid())
+				send_prg();
 		}
 	}
 
@@ -415,15 +437,15 @@ void U1541::show_prg_control() {
 	fb_prg.Display();
 
 	if (fb_prg.HasSelected()) {
-		load_prg(fb_prg.GetSelected().string());
+		prg.load(fb_prg.GetSelected().string());
 		fb_prg.ClearSelected();
 	}
 
-	if (prg_data.size() > min_prg_size) {
+	if (prg.is_valid()) {
 		f.sl();
 
 		if (f.btn("Start PRG"))
-			send_prg(prg_data);
+			send_prg();
 	}
 }
 
@@ -539,21 +561,12 @@ void U1541::kbp(const char *str) {
 	sock->send_fully(data.data(), data.size());
 }
 
-void U1541::send_prg(const std::vector<uint8_t> &prg) {
-	if (prg.size() >= max_prg_size)
-		throw std::runtime_error("prg too big");
-
+void U1541::send_prg() {
 	data.clear();
 	data.emplace_back(0xff02 & 0xff);
 	data.emplace_back(0xff02 >> 8);
 
-	unsigned size = prg.size();
-
-	data.emplace_back(size & 0xff);
-	data.emplace_back(size >> 8);
-
-	data.insert(data.end(), prg.begin(), prg.end());
-
+	prg.store(data);
 	sock->send_fully(data.data(), data.size());
 }
 
